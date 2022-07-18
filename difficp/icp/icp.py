@@ -185,6 +185,7 @@ class ICP(ABC):
         target_normals=None,
         cam_intr=None,
         cam_pose=None,
+        loam_weights=None,
         **unused_kwargs,
     ):
         """
@@ -213,6 +214,8 @@ class ICP(ABC):
                 cam_intr=cam_intr,
                 cam_pose=cam_pose,
             )
+            if loam_weights is not None:
+                weights = loam_weights
             residuals = self.dist_fn(
                 src,
                 tgt,
