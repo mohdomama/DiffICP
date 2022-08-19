@@ -12,6 +12,7 @@ from .correspondence_function import get_correspondence_function
 from .distance_function import get_distance_function
 from .optimizer import LMOptimizer6DoF, LMOptimizerSMPL
 from .procrustes_solver import solve_procrustes_svd, LinearizedProcrustesSolver
+import time
 
 
 def combine_weights(weights):
@@ -214,8 +215,12 @@ class ICP(ABC):
                 cam_intr=cam_intr,
                 cam_pose=cam_pose,
             )
+
+
             if loam_weights is not None:
                 weights = loam_weights
+
+            tic = time.time()
             residuals = self.dist_fn(
                 src,
                 tgt,
@@ -223,6 +228,9 @@ class ICP(ABC):
                 target_normals=tgt_normals,
                 weights=weights,
             )
+            toc = time.time()
+            # print('[Speed Test] Residual Time: ', toc - tic)
+            
             mse = torch.mean(residuals ** 2)
             num_corrs = len(src)
             if self.verbose:

@@ -1,6 +1,7 @@
 """Solvers for procrustes problem (finding optimal global rotation/translation)"""
 
 import math
+import time
 
 import torch
 
@@ -57,13 +58,27 @@ def solve_procrustes_svd(pose, sources, targets, weights=None, **kwargs):
     target_center = weighted_centroid(targets, weights)
     sources = sources - source_center
     targets = targets - target_center
+    tic = time.time()
+    weights=None
     if weights is not None:
         svd_w = torch.matmul(torch.diag(weights.view(-1)), targets)
         svd_w = torch.matmul(sources.t(), svd_w)
     else:
         svd_w = torch.matmul(sources.t(), targets)  # 3x3
+    toc = time.time()
+    # print('[Speed Test] Matmul Time: ', toc - tic)
+
+    tic = time.time()
     check_conditioning(svd_w)
+    toc = time.time()
+    # print('[Speed Test] Check Condition Time: ', toc - tic)
+    
+    tic = time.time()
     svd_u, _, svd_v = torch.svd(svd_w)  # 3x3, 1x3, 3x3
+    toc = time.time()
+    # print('[Speed Test] SVD Time: ', toc - tic)
+
+    tic = time.time()
     rotation = torch.matmul(svd_v, svd_u.t())  # 3x3
     if torch.det(rotation) < 0:  # reflection check
         reflection_fix = torch.ones_like(svd_v, dtype=svd_v.dtype, device=svd_v.device)
@@ -75,6 +90,11 @@ def solve_procrustes_svd(pose, sources, targets, weights=None, **kwargs):
     pose_change[:3, :3] = rotation
     pose_change[:3, 3] = translation.view(-1)
     pose_change[3, 3] = 1
+    toc = time.time()
+    # print('[Speed Test] Other MatMul Time: ', toc - tic)
+
+
+
     return torch.matmul(pose_change, pose)  # 4x4
 
 

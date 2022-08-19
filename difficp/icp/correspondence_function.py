@@ -1,8 +1,12 @@
 """Functions for ICP Correspondence Matching and Weighting/Rejection"""
 
 import torch
-
+import time
 from difficp.utils.geometry_utils import global_to_screen_projection
+from IPython.core.debugger import set_trace
+from sklearn.neighbors import KDTree
+import numpy as np
+
 
 
 def get_correspondence_function(
@@ -90,8 +94,126 @@ def filter_tensor_list(tensors, indices):
         return None
     return [filter_tensor(tensor, indices) for tensor in tensors]
 
-
 class NearestNeighbors:
+    """
+    Pytorch Differentiable 1-Nearest Neighbor
+    used by 1) calling nn=NearestNeighbor(targets) 2) neighbors=nn(sources)
+    optionally, selection can be applied to other tensors with similar shape as targets
+        by using other_neighbors=nn.apply(other_tensor)
+    selection depends on temperature parameter:
+        if temperature=0, we perform standard non-differentiable nearest neighbors with
+            hard argmin selection
+        if temperature>0, we perform differentiable soft nearest neighbors as linear
+            combination of all target points based on softmax over negative distances
+    """
+
+    def __init__(self, targets, temperature=0):
+        """
+        :param targets: target points in which we want to find the nearest neighbors
+        :param temperature: temperature parameter >=0, defines smoothness of function
+        """
+        self.targets = targets
+        self.temperature = temperature
+        self.do_soft_selection = False
+        self.dists = None
+        self.weights = None
+
+    @staticmethod
+    def pairwise_dist(x, y):
+        """calculate the pairwise distances between two sets of points (x,y)"""
+        xx = torch.mm(x, x.t())  # NxN
+        yy = torch.mm(y, y.t())  # MxM
+        zz = torch.mm(x, y.t())  # NxM
+        diag_xx = xx.diag().unsqueeze(1)  # Nx1
+        diag_yy = yy.diag().unsqueeze(0)  # 1xM
+        pairwise_dists = diag_xx + diag_yy - 2 * zz  # NxM
+        return pairwise_dists  # NxM
+
+    @staticmethod
+    def pairwise_dist_lowmem(x, y):
+        xx = torch.sum(x * x, dim=-1, keepdim=True)  # Nx1
+        yy = torch.sum(y * y, dim=-1, keepdim=True).t()  # 1xM
+        zz = torch.matmul(x, y.t())  # NxM
+        zz *= -2  # NxM
+        zz += xx  # NxM
+        zz += yy  # NxM
+        return zz
+
+    def differentiable_selection(self, dists, temperature=0):
+        """
+        computes the continuous deterministic relaxation of 1-nearest-neighbors
+        based on the paper Neural Nearest Neighbors Networks by Ploetz et al.
+        :param dists: pair-wise distances from sources to targets, shape NxM
+        :param temperature: defines smoothness selection, scalar >= 0
+        :return: nearest neighbor probabilities for each source, shape N x M
+        """
+        alpha = -dists / temperature  # N x M
+        weights = torch.softmax(alpha, dim=-1)  # N x M
+        return weights
+
+    def apply(self, targets):
+        """
+        apply previously found selection to given targets (needed to handle normals/...)
+        :param targets: targets, must have same first dimension size as self.targets
+        :return: closest target for each source point
+        """
+        tic = time.time()
+        if targets is None:
+            return None
+        assert targets.shape[0] == self.targets.shape[0]
+        if self.do_soft_selection:
+            return torch.mm(self.weights, targets)
+        toc = time.time()
+        # print('[Speed Test] Apply: ', toc - tic)
+        return targets[torch.argmin(self.dists, dim=-1)]
+
+    def find_targets(self, s, t):
+        print('Starting Target Finding!')
+        # tree_data = t.detach().cpu().numpy()
+        # np.random.shuffle(tree_data)
+        # tree = KDTree(tree_data, leaf_size=10000)
+        # print('KD Tree Created!')
+
+        indices = torch.zeros(s.shape[0]).to(dtype=torch.long)
+        chunk_size = 1000
+        chunks = list(range(0, s.shape[0], chunk_size))
+        chunks.append(s.shape[0])
+        # for i in range(s.shape[0]):
+        #     # dis = torch.linalg.norm(t - s[i], axis=1)
+        #     # neigh_idx = torch.argmin(dis)
+        #     # indices[i] = neigh_idx.to(torch.int16)
+        #     dis = torch.cdist(t, s[i:i+1000])
+        #     set_trace()
+        #     # dist, ind = tree.query(s[i].detach().cpu().numpy().reshape(-1,3), k=1)
+        #     # indices[i] = torch.tensor(ind)
+        for idx in range(len(chunks)-1):
+            start = chunks[idx]
+            end = chunks[idx+1]
+            dis = torch.cdist(t, s[start:end])
+            indices[start:end] = torch.argmin(dis, axis=0).to(torch.long)
+        return t[indices]
+
+    def __call__(self, sources, *args, **kwargs):
+        """
+        find the nearest target for each source point
+        :param sources: source points, shape Nx3
+        :return: closest target for each source point, shape Nx3
+        """
+        tic  = time.time()
+        out_targets = self.find_targets(sources, self.targets)
+        toc = time.time()
+        # print('[*Speed Test*] Correspondence: ', toc - tic)
+        return out_targets
+        # if self.do_soft_selection:
+        #     tic  = time.time()
+        #     self.weights = self.differentiable_selection(self.dists, self.temperature)
+        #     toc = time.time()
+        #     print('[Speed Test] Diff Selection: ', toc - tic)
+        # return self.apply(self.targets)
+
+
+
+class NearestNeighbors_old:
     """
     Pytorch Differentiable 1-Nearest Neighbor
     used by 1) calling nn=NearestNeighbor(targets) 2) neighbors=nn(sources)
@@ -154,11 +276,14 @@ class NearestNeighbors:
         :param targets: targets, must have same first dimension size as self.targets
         :return: closest target for each source point
         """
+        tic = time.time()
         if targets is None:
             return None
         assert targets.shape[0] == self.targets.shape[0]
         if self.do_soft_selection:
             return torch.mm(self.weights, targets)
+        toc = time.time()
+        # print('[Speed Test] Apply: ', toc - tic)
         return targets[torch.argmin(self.dists, dim=-1)]
 
     def __call__(self, sources, *args, **kwargs):
@@ -167,9 +292,15 @@ class NearestNeighbors:
         :param sources: source points, shape Nx3
         :return: closest target for each source point, shape Nx3
         """
-        self.dists = self.pairwise_dist(sources, self.targets)  # N x M
+        tic  = time.time()
+        self.dists = self.pairwise_dist_lowmem(sources, self.targets)  # N x M
+        toc = time.time()
+        # print('[Speed Test] Pairwise dist: ', toc - tic)
         if self.do_soft_selection:
+            tic  = time.time()
             self.weights = self.differentiable_selection(self.dists, self.temperature)
+            toc = time.time()
+            # print('[Speed Test] Diff Selection: ', toc - tic)
         return self.apply(self.targets)
 
 
@@ -191,9 +322,12 @@ def match_points_nn(
         - source_tensors, list of tensors, each tensor of shape Kx?
         - target_tensors, list of tensors, each tensor of shape Kx?
     """
+    tic = time.time()
     knn = NearestNeighbors(targets, temperature=temperature)
     sources = sources.clone()
     targets = knn(sources)  # N x M
+    toc = time.time()
+    # print('[Speed Test] KNN Speed: ', toc - tic)
     if source_tensors is not None:
         source_tensors = [x.clone() if x is not None else None for x in source_tensors]
     if target_tensors is not None:
