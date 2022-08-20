@@ -15,3 +15,4 @@ tmp.py
 /scannet_results/
 /metrics.csv
 /disko.egg-info/
+*.egg-info/
