@@ -168,7 +168,7 @@ class NearestNeighbors:
         return targets[torch.argmin(self.dists, dim=-1)]
 
     def find_targets(self, s, t):
-        print('Starting Target Finding!')
+        # print('Starting Target Finding!')
         # tree_data = t.detach().cpu().numpy()
         # np.random.shuffle(tree_data)
         # tree = KDTree(tree_data, leaf_size=10000)

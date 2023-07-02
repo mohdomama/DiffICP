@@ -15,8 +15,9 @@ class IllconditionedSVDException(Exception):
 
 def get_condition_number(matrix):
     """Calculate condition number of a matrix (to check if its ill-conditioned)"""
-    values, _ = torch.eig(matrix)
-    real_values = values[:, 0]
+    values, _ = torch.linalg.eig(matrix)
+    # real_values = values[:, 0]
+    real_values = values
     max_eig_value = torch.max(torch.abs(real_values))
     min_eig_value = torch.min(torch.abs(real_values))
     cond_num = (max_eig_value / min_eig_value).item()
